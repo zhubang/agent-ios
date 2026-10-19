@@ -113,6 +113,33 @@ jobs:
           # 解压完就把压缩包删了，省 60 MB
           rm -f slim-sdk.zip slim-sdk.zip.part*
 
+      # ---------------------------------------------------------------- #
+      #  打包 slim-sdk 时只装了 HBuilder-Hello/ 和 SDK/ 两个目录，
+      #  漏掉 SDK 根目录的 uniapp.podspec —— Podfile 里 `:path => '..'`
+      #  指的就是它，缺了 CocoaPods 会报 "No podspec found for `uniapp`"。
+      #  license.md 也是 podspec 里 license 字段引用的，同样必须有。
+      #  这 4 个文件从仓库根目录拷过去补上。
+      # ---------------------------------------------------------------- #
+      - name: 补齐 SDK 根目录文件
+        run: |
+          set -e
+          echo "---- 仓库根目录 ----"
+          ls -la *.podspec *.md *.txt *.xls 2>/dev/null || true
+          for f in uniapp.podspec license.md readme.txt Feature-iOS.xls; do
+            if [ -f "$f" ]; then
+              cp "$f" workspace/SDK/
+              echo "  补上: $f"
+            else
+              echo "  ⚠ 缺: $f"
+            fi
+          done
+          echo "---- workspace/SDK 根目录 ----"
+          ls -la workspace/SDK/
+          if [ ! -f workspace/SDK/uniapp.podspec ]; then
+            echo "❌ uniapp.podspec 没补上，pod install 必挂"
+            exit 1
+          fi
+
       - name: pod install
         working-directory: workspace/SDK/HBuilder-Hello
         run: |
