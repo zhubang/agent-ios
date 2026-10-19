@@ -6,14 +6,11 @@ on:
   push:
     branches: [main, master]
 
-# SDK 切成 4 个分卷（GitHub 网页上传有单文件和总量两道限制，
-# 59.6MB 一次传不上去，所以分开传，CI 里拼回来）
 env:
   SDK_SHA256: 062371d9e9ab24348bbb7cca89cd7c0f2715c3d2e8c3779157f7755287e23c1d
 
 jobs:
   build:
-    # macOS 15 runner = Apple Silicon + Xcode 16.x
     runs-on: macos-15
     timeout-minutes: 90
 
@@ -21,21 +18,40 @@ jobs:
       - name: 取代码
         uses: actions/checkout@v4
 
+      # ---------------------------------------------------------------- #
+      #  ★ 关键：GitHub 的 macOS runner 只剩 2~4 GB 可用空间，
+      #    解压 307MB 的 SDK 时会报 "write error (disk full?)" 然后挂掉。
+      #    先把用不到的东西（模拟器运行时占了 6~10 GB）清掉。
+      # ---------------------------------------------------------------- #
+      - name: 清理磁盘
+        run: |
+          echo "==== 清理前 ===="
+          df -h /
+          XCODE=$(xcode-select -p | sed 's|/Contents/Developer||')
+          echo "Xcode: $XCODE"
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/* 2>/dev/null || true
+          sudo rm -rf "$XCODE/Contents/Developer/Platforms/WatchOS.platform" 2>/dev/null || true
+          sudo rm -rf "$XCODE/Contents/Developer/Platforms/AppleTVOS.platform" 2>/dev/null || true
+          sudo rm -rf "$XCODE/Contents/Developer/Platforms/WatchSimulator.platform" 2>/dev/null || true
+          sudo rm -rf "$XCODE/Contents/Developer/Platforms/AppleTVSimulator.platform" 2>/dev/null || true
+          sudo rm -rf ~/Library/Developer/Xcode/DerivedData/* 2>/dev/null || true
+          rm -rf ~/.cocoapods 2>/dev/null || true
+          echo "==== 清理后 ===="
+          df -h /
+
       - name: 环境信息
         run: |
           sw_vers
           xcodebuild -version
           xcode-select -p
-          echo "----"
-          df -h /
           echo "---- 仓库内容 ----"
-          ls -la
+          ls -lh
 
       - name: 装 CocoaPods
         run: |
           pod --version || (gem install cocoapods --no-document && pod --version)
 
-      - name: 合并分卷 + 解压
+      - name: 合并分卷 + 修文件名 + 解压
         run: |
           set -e
           echo "---- 分卷 ----"
@@ -53,13 +69,49 @@ jobs:
             exit 1
           fi
 
-          unzip -q slim-sdk.zip -d workspace
+          # ---------------------------------------------------------- #
+          #  SDK 里有个中文名的 .md（uni-app本地Pod模块使用说明.md），
+          #  zip 里存的是 GBK 编码的文件名，macOS 解压时会报
+          #  "write error (disk full?)" 然后 exit 50 —— 其实是文件名非法。
+          #  这文件对编译毫无用处，重写 zip 时直接跳过非 ASCII 名字。
+          # ---------------------------------------------------------- #
+          echo "---- 过滤掉非 ASCII 文件名 ----"
+          python3 - <<'PYEOF'
+          import zipfile, os, shutil
+          src = 'slim-sdk.zip'
+          dst = 'slim-clean.zip'
+          skipped = 0
+          kept = 0
+          with zipfile.ZipFile(src) as zi, \
+               zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED, allowZip64=True) as zo:
+              for i in zi.infolist():
+                  try:
+                      i.filename.encode('ascii')
+                  except UnicodeEncodeError:
+                      print('  跳过:', i.filename)
+                      skipped += 1
+                      continue
+                  zo.writestr(i, zi.read(i.filename))
+                  kept += 1
+          print('  保留 %d 条，跳过 %d 条' % (kept, skipped))
+          os.remove(src)
+          shutil.move(dst, src)
+          PYEOF
+
+          echo "---- 解压 ----"
+          mkdir -p workspace
+          unzip -q -o slim-sdk.zip -d workspace
           echo "---- 结构 ----"
           ls -la workspace
           echo "---- HBuilder-Hello ----"
           ls workspace/SDK/HBuilder-Hello | head -30
           echo "---- www 文件数 ----"
           find workspace/SDK/HBuilder-Hello/HBuilder-Hello/Pandora/apps -type f | wc -l
+          echo "---- 磁盘 ----"
+          df -h /
+
+          # 解压完就把压缩包删了，省 60 MB
+          rm -f slim-sdk.zip slim-sdk.zip.part*
 
       - name: pod install
         working-directory: workspace/SDK/HBuilder-Hello
@@ -73,6 +125,8 @@ jobs:
           tail -30 /tmp/pod.log
           echo "---- 生成了什么 ----"
           ls -d *.xcworkspace *.xcodeproj Pods 2>/dev/null
+          echo "---- 磁盘 ----"
+          df -h /
 
       - name: 编译
         working-directory: workspace/SDK/HBuilder-Hello
@@ -97,6 +151,7 @@ jobs:
           echo "===== 编译成功 ====="
           tail -20 /tmp/build.log
           ls -la build/App.xcarchive/Products/Applications/
+          df -h /
 
       - name: 打成 IPA
         working-directory: workspace/SDK/HBuilder-Hello
@@ -104,6 +159,7 @@ jobs:
           set -e
           APP=$(ls -d build/App.xcarchive/Products/Applications/*.app | head -1)
           echo "App: $APP"
+          rm -rf out
           mkdir -p out/Payload
           cp -R "$APP" out/Payload/
           cd out
