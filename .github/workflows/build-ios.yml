@@ -1,0 +1,133 @@
+name: Build iOS IPA
+
+# 手动点一下就跑；以后改了内容 push 也会自动跑
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+# SDK 切成 4 个分卷（GitHub 网页上传有单文件和总量两道限制，
+# 59.6MB 一次传不上去，所以分开传，CI 里拼回来）
+env:
+  SDK_SHA256: 062371d9e9ab24348bbb7cca89cd7c0f2715c3d2e8c3779157f7755287e23c1d
+
+jobs:
+  build:
+    # macOS 15 runner = Apple Silicon + Xcode 16.x
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v4
+
+      - name: 环境信息
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcode-select -p
+          echo "----"
+          df -h /
+          echo "---- 仓库内容 ----"
+          ls -la
+
+      - name: 装 CocoaPods
+        run: |
+          pod --version || (gem install cocoapods --no-document && pod --version)
+
+      - name: 合并分卷 + 解压
+        run: |
+          set -e
+          echo "---- 分卷 ----"
+          ls -lh slim-sdk.zip.part*
+          cat slim-sdk.zip.part* > slim-sdk.zip
+          echo "---- 合并后 ----"
+          ls -lh slim-sdk.zip
+
+          echo "---- 校验 sha256 ----"
+          ACTUAL=$(shasum -a 256 slim-sdk.zip | awk '{print $1}')
+          echo "期望: $SDK_SHA256"
+          echo "实际: $ACTUAL"
+          if [ "$SDK_SHA256" != "$ACTUAL" ]; then
+            echo "❌ 分卷合并后校验失败 —— 有分卷没传全或者传坏了"
+            exit 1
+          fi
+
+          unzip -q slim-sdk.zip -d workspace
+          echo "---- 结构 ----"
+          ls -la workspace
+          echo "---- HBuilder-Hello ----"
+          ls workspace/SDK/HBuilder-Hello | head -30
+          echo "---- www 文件数 ----"
+          find workspace/SDK/HBuilder-Hello/HBuilder-Hello/Pandora/apps -type f | wc -l
+
+      - name: pod install
+        working-directory: workspace/SDK/HBuilder-Hello
+        run: |
+          set -o pipefail
+          pod install --repo-update > /tmp/pod.log 2>&1 || {
+            echo "===== pod install 失败，最后 200 行 ====="
+            tail -200 /tmp/pod.log
+            exit 1
+          }
+          tail -30 /tmp/pod.log
+          echo "---- 生成了什么 ----"
+          ls -d *.xcworkspace *.xcodeproj Pods 2>/dev/null
+
+      - name: 编译
+        working-directory: workspace/SDK/HBuilder-Hello
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace HBuilder-Hello.xcworkspace \
+            -scheme HBuilder \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/App.xcarchive \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            > /tmp/build.log 2>&1 || {
+              echo "===== 编译失败，最后 250 行 ====="
+              tail -250 /tmp/build.log
+              exit 1
+            }
+          echo "===== 编译成功 ====="
+          tail -20 /tmp/build.log
+          ls -la build/App.xcarchive/Products/Applications/
+
+      - name: 打成 IPA
+        working-directory: workspace/SDK/HBuilder-Hello
+        run: |
+          set -e
+          APP=$(ls -d build/App.xcarchive/Products/Applications/*.app | head -1)
+          echo "App: $APP"
+          mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          cd out
+          zip -qry ../代理客户端.ipa Payload
+          cd ..
+          ls -lh 代理客户端.ipa
+          echo "---- 内容抽查 ----"
+          unzip -l 代理客户端.ipa | head -20
+
+      - name: 上传 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: 代理客户端-ipa
+          path: workspace/SDK/HBuilder-Hello/代理客户端.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 编译日志（失败时也有）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            /tmp/pod.log
+            /tmp/build.log
+          if-no-files-found: ignore
+          retention-days: 7
