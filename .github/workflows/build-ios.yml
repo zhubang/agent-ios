@@ -208,6 +208,32 @@ jobs:
             echo "  改成  : $(cat "$f" | tr '\n' ' ')"
           done
 
+          # ---------------------------------------------------------- #
+          #  ★ 启动画面：LaunchScreen.storyboard 里硬编码了
+          #      image="app"（DCloud 绿H）+ text="HBuilder Hello"
+          #    还有 zh-Hans.lproj/LaunchScreen.strings 里的 ${APPNAME}
+          #    启动时会闪一下这个，把它改成我们的。
+          # ---------------------------------------------------------- #
+          echo "---- 改启动画面文字 ----"
+          for f in \
+            workspace/SDK/HBuilder-Hello/HBuilder-Hello/LaunchScreen.storyboard \
+            workspace/SDK/HBuilder-Hello/HBuilder-Hello/LaunchScreenAD.storyboard \
+            workspace/SDK/HBuilder-Hello/HBuilder-Hello/Base.lproj/LaunchScreen.storyboard
+          do
+            [ -f "$f" ] || continue
+            before=$(grep -o 'text="[^"]*"' "$f" | head -1)
+            perl -pi -e 's/text="HBuilder Hello"/text="代理客户端"/g' "$f"
+            after=$(grep -o 'text="[^"]*"' "$f" | head -1)
+            echo "  $(basename "$f"): $before -> $after"
+          done
+
+          for f in workspace/SDK/HBuilder-Hello/HBuilder-Hello/*.lproj/LaunchScreen.strings; do
+            [ -f "$f" ] || continue
+            echo "  strings 原: $(cat "$f" | tr '\n' ' ')"
+            perl -pi -e 's/\$\{APPNAME\}/代理客户端/g' "$f"
+            echo "  strings 新: $(cat "$f" | tr '\n' ' ')"
+          done
+
           echo "---- 强制改 Info.plist ----"
           python3 - <<'PYEOF'
           import plistlib
