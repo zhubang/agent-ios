@@ -209,29 +209,53 @@ jobs:
           done
 
           # ---------------------------------------------------------- #
-          #  ★ 启动画面：LaunchScreen.storyboard 里硬编码了
-          #      image="app"（DCloud 绿H）+ text="HBuilder Hello"
-          #    还有 zh-Hans.lproj/LaunchScreen.strings 里的 ${APPNAME}
-          #    启动时会闪一下这个，把它改成我们的。
+          #  ★ 启动画面：故事板里写的是 image="app"，但工程里没有
+          #    app.imageset —— 所以 iOS 显示的是 DCloud 的默认图（绿H）。
+          #    这里现场建一个 app.imageset，用我们的 App 图标填进去，
+          #    storyboard 不用改，运行时自然就解析成我们的图标。
+          #    文字顺手改成「代理客户端」。
           # ---------------------------------------------------------- #
-          echo "---- 改启动画面文字 ----"
-          for f in \
-            workspace/SDK/HBuilder-Hello/HBuilder-Hello/LaunchScreen.storyboard \
-            workspace/SDK/HBuilder-Hello/HBuilder-Hello/LaunchScreenAD.storyboard \
-            workspace/SDK/HBuilder-Hello/HBuilder-Hello/Base.lproj/LaunchScreen.storyboard
-          do
+          echo "---- 建 app.imageset（启动画面图标）----"
+          XCASSETS="workspace/SDK/HBuilder-Hello/HBuilder/Images.xcassets"
+          SRC_ICON="$XCASSETS/AppIcon.appiconset/Icon-1024.png"
+          APP_SET="$XCASSETS/app.imageset"
+          if [ -f "$SRC_ICON" ]; then
+            mkdir -p "$APP_SET"
+            sips -z 60 60 "$SRC_ICON" --out "$APP_SET/app.png" >/dev/null 2>&1
+            sips -z 120 120 "$SRC_ICON" --out "$APP_SET/app@2x.png" >/dev/null 2>&1
+            sips -z 180 180 "$SRC_ICON" --out "$APP_SET/app@3x.png" >/dev/null 2>&1
+            cat > "$APP_SET/Contents.json" <<'JSONEOF'
+          {
+            "images" : [
+              { "filename" : "app.png",    "idiom" : "universal", "scale" : "1x" },
+              { "filename" : "app@2x.png", "idiom" : "universal", "scale" : "2x" },
+              { "filename" : "app@3x.png", "idiom" : "universal", "scale" : "3x" }
+            ],
+            "info" : { "author" : "xcode", "version" : 1 }
+          }
+          JSONEOF
+            echo "  app.imageset 内容:"
+            ls -la "$APP_SET"
+            file "$APP_SET"/app*.png 2>/dev/null || true
+          else
+            echo "  ⚠ 找不到 Icon-1024.png，启动画面图标保持原样"
+            ls -la "$XCASSETS/AppIcon.appiconset" | head -8
+          fi
+
+          echo "---- 启动画面文字改成目标名 ----"
+          for f in workspace/SDK/HBuilder-Hello/HBuilder-Hello/*.storyboard \
+                   workspace/SDK/HBuilder-Hello/HBuilder-Hello/*.lproj/LaunchScreen.storyboard; do
             [ -f "$f" ] || continue
             before=$(grep -o 'text="[^"]*"' "$f" | head -1)
             perl -pi -e 's/text="HBuilder Hello"/text="代理客户端"/g' "$f"
             after=$(grep -o 'text="[^"]*"' "$f" | head -1)
-            echo "  $(basename "$f"): $before -> $after"
+            echo "  $(echo "$f" | sed 's|.*HBuilder-Hello/||'): $before -> $after"
           done
 
           for f in workspace/SDK/HBuilder-Hello/HBuilder-Hello/*.lproj/LaunchScreen.strings; do
             [ -f "$f" ] || continue
-            echo "  strings 原: $(cat "$f" | tr '\n' ' ')"
-            perl -pi -e 's/\$\{APPNAME\}/代理客户端/g' "$f"
-            echo "  strings 新: $(cat "$f" | tr '\n' ' ')"
+            printf '/* Localized versions of Info.plist keys */\n"lAp-n0-0hk.text" = "代理客户端";\n' > "$f"
+            echo "  $(echo "$f" | sed 's|.*HBuilder-Hello/||'): 已写死为代理客户端"
           done
 
           echo "---- 强制改 Info.plist ----"
