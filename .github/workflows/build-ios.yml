@@ -140,6 +140,95 @@ jobs:
             exit 1
           fi
 
+      # ---------------------------------------------------------------- #
+      #  新版 App 的 www：改界面/功能只要换这个 1MB 的包，
+      #  不用重传 59.6MB 的 SDK 分卷。
+      # ---------------------------------------------------------------- #
+      - name: 覆盖 www（新版 App 产物）
+        run: |
+          set -e
+          WWW="workspace/SDK/HBuilder-Hello/HBuilder-Hello/Pandora/apps/__UNI__9A5FF7C/www"
+          if [ -f www.zip ]; then
+            echo "---- 旧 www ----"
+            find "$WWW" -type f 2>/dev/null | wc -l
+            rm -rf "$WWW"
+            mkdir -p "$WWW"
+            rm -rf /tmp/www && mkdir -p /tmp/www
+            unzip -oq www.zip -d /tmp/www
+            cp -R /tmp/www/. "$WWW"/
+            echo "---- 新 www ----"
+            find "$WWW" -type f | wc -l
+            ls "$WWW"
+            echo "---- manifest 里的 id ----"
+            grep -o '"id":"[^"]*"' "$WWW/manifest.json" || true
+          else
+            echo "⚠ 没有 www.zip，用 SDK 里自带的旧版"
+          fi
+
+      # ---------------------------------------------------------------- #
+      #  换图标 + 把显示名/AppKey 再强制写一遍。
+      #  slim-sdk 里其实已经是改好的，但保险起见编译前再砸一次，
+      #  免得 Info.plist 被工程设置覆盖。
+      # ---------------------------------------------------------------- #
+      - name: 换图标 + 改显示名
+        run: |
+          set -e
+          ICON_DIR="workspace/SDK/HBuilder-Hello/HBuilder/Images.xcassets/AppIcon.appiconset"
+          LEGACY_DIR="workspace/SDK/HBuilder-Hello/HBuilder-Hello/icon"
+          PLIST="workspace/SDK/HBuilder-Hello/HBuilder-Hello/HBuilder-Hello-Info.plist"
+
+          if [ -f icons.zip ]; then
+            rm -rf /tmp/icons && mkdir -p /tmp/icons
+            unzip -oq icons.zip -d /tmp/icons
+            echo "---- 图标包 ----"
+            ls /tmp/icons/AppIcon.appiconset | head -20
+            cp -f /tmp/icons/AppIcon.appiconset/* "$ICON_DIR"/
+            echo "---- 换完后的 AppIcon ----"
+            ls "$ICON_DIR" | head -22
+            if [ -d "$LEGACY_DIR" ] && [ -d /tmp/icons/icon ]; then
+              cp -f /tmp/icons/icon/* "$LEGACY_DIR"/
+              echo "---- 启动图 icon/ 也换了 ----"
+            fi
+          else
+            echo "没有 icons.zip，图标保持原样"
+          fi
+
+          # ---------------------------------------------------------- #
+          #  ★ 名字不对的真凶：这两个本地化文件会覆盖 Info.plist 的
+          #    CFBundleDisplayName。
+          #      en.lproj/InfoPlist.strings      -> "HBuilder Hello"
+          #      zh-Hans.lproj/InfoPlist.strings -> "HBuilder 你好"
+          #    中文系统下桌面显示的就是「HBuilder 你好」。
+          # ---------------------------------------------------------- #
+          echo "---- 修 InfoPlist.strings（名字不对的真凶）----"
+          for f in workspace/SDK/HBuilder-Hello/HBuilder-Hello/*.lproj/InfoPlist.strings; do
+            [ -f "$f" ] || continue
+            echo "  原内容: $(cat "$f" | tr '\n' ' ')"
+            printf '/* Localized versions of Info.plist keys */\nCFBundleDisplayName="代理客户端";\n' > "$f"
+            echo "  改成  : $(cat "$f" | tr '\n' ' ')"
+          done
+
+          echo "---- 强制改 Info.plist ----"
+          python3 - <<'PYEOF'
+          import plistlib
+          p = 'workspace/SDK/HBuilder-Hello/HBuilder-Hello/HBuilder-Hello-Info.plist'
+          with open(p, 'rb') as f:
+              d = plistlib.load(f)
+          d['CFBundleDisplayName'] = '代理客户端'
+          d['CFBundleName'] = '代理客户端'
+          d['dcloud_appkey'] = '5a09282097db5e4661daa29a4bdcd234'
+          with open(p, 'wb') as f:
+              plistlib.dump(d, f, fmt=plistlib.FMT_BINARY)
+          print('  CFBundleDisplayName:', d['CFBundleDisplayName'])
+          print('  CFBundleName       :', d['CFBundleName'])
+          print('  dcloud_appkey      :', d['dcloud_appkey'])
+          PYEOF
+
+          echo "---- pbxproj 里的 BundleID / 版本 ----"
+          grep -E "PRODUCT_BUNDLE_IDENTIFIER|MARKETING_VERSION|CURRENT_PROJECT_VERSION" \
+            workspace/SDK/HBuilder-Hello/HBuilder-Hello.xcodeproj/project.pbxproj \
+            | sed 's/^[[:space:]]*//' | sort -u
+
       - name: pod install
         working-directory: workspace/SDK/HBuilder-Hello
         run: |
