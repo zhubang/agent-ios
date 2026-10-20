@@ -236,11 +236,31 @@ jobs:
           JSONEOF
             echo "  app.imageset 内容:"
             ls -la "$APP_SET"
-            file "$APP_SET"/app*.png 2>/dev/null || true
           else
-            echo "  ⚠ 找不到 Icon-1024.png，启动画面图标保持原样"
-            ls -la "$XCASSETS/AppIcon.appiconset" | head -8
+            echo "  ⚠ 找不到 Icon-1024.png"
           fi
+
+          # ---------------------------------------------------------- #
+          #  ★ 真凶在这里：Info.plist 的 UILaunchStoryboardName = LaunchScreen，
+          #    Xcode 两边冲突时只编根目录那个，而它用的是 image="dclogo.png"。
+          #    dclogo 就是那个绿 H，所以直接把这俩文件替换成我们的图标。
+          #    81pt 的 imageView -> @2x=162px, @3x=243px
+          # ---------------------------------------------------------- #
+          echo "---- 替换 dclogo（真正在显示的那张绿H）----"
+          LOGO_DIR="workspace/SDK/HBuilder-Hello/HBuilder-Hello"
+          for f in "$LOGO_DIR"/dclogo@2x.png "$LOGO_DIR"/dclogo@3x.png; do
+            if [ -f "$f" ]; then
+              echo "  原: $(basename "$f")  $(stat -f%z "$f") 字节"
+            fi
+          done
+          if [ -f "$SRC_ICON" ]; then
+            sips -z 162 162 "$SRC_ICON" --out "$LOGO_DIR/dclogo@2x.png" >/dev/null 2>&1
+            sips -z 243 243 "$SRC_ICON" --out "$LOGO_DIR/dclogo@3x.png" >/dev/null 2>&1
+            sips -z 81  81  "$SRC_ICON" --out "$LOGO_DIR/dclogo.png"    >/dev/null 2>&1
+          fi
+          for f in "$LOGO_DIR"/dclogo.png "$LOGO_DIR"/dclogo@2x.png "$LOGO_DIR"/dclogo@3x.png; do
+            [ -f "$f" ] && echo "  新: $(basename "$f")  $(stat -f%z "$f") 字节"
+          done
 
           echo "---- 启动画面文字改成目标名 ----"
           for f in workspace/SDK/HBuilder-Hello/HBuilder-Hello/*.storyboard \
